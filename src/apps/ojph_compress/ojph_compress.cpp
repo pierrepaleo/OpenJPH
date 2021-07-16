@@ -418,6 +418,116 @@ const char *get_file_extension(const char *filename)
 // main
 //////////////////////////////////////////////////////////////////////////////
 
+
+uint16_t be2le(const uint16_t v) {
+  return (uint16_t) ((v<<8) | (v>>8));
+}
+
+int get_data_line(uint16_t* image_data, int line_num, int Nx, int Ny, ojph::line_buf* linebuf, int convert_big_endian) {
+  if (line_num >= Ny) {
+    // TODO loop to 0 ?
+    return -1;
+  }
+  uint16_t* image_line = image_data + Nx * line_num;
+  if (convert_big_endian) {
+    const uint16_t* sp = image_line;
+    int32_t* dp = linebuf->i32;
+      for (int i = Nx; i > 0; --i, sp+=1)
+        *dp++ = (int32_t) be2le(*sp);
+  }
+  else {
+    int32_t* linebuf_data = linebuf->i32;
+    for (int i = 0; i < Nx; i++) linebuf_data[i] = (int32_t) image_line[i];
+  }
+  return 0;
+}
+
+
+
+
+// Unused: --colour_trans --dims --num_comps --signed --bit_depth --downsamp
+// comp_subsampling = (1,1), bit_depth=16, is_signed=0
+int compress(uint16_t* data, int Nx, int Ny, char* output_filename) {
+
+  ojph::codestream codestream;
+  ojph::param_siz siz = codestream.access_siz();
+
+
+ // params
+  ojph::size block_size(64,64);
+  ojph::size tile_size(0, 0);
+  ojph::point tile_offset(0, 0);
+  ojph::point image_offset(0, 0);
+  int num_decompositions = 5;
+  int num_precints = 2; //  {128,128},{256,256}
+  const int max_precinct_sizes = 33; //maximum number of decompositions is 32
+  ojph::size precinct_size[max_precinct_sizes];
+  // TODO fill-in precinct_size
+  ojph::size tmp(128, 128);
+  precinct_size[0].w = tmp.w;
+  precinct_size[0].h = tmp.h;
+  tmp.w = tmp.h = 256;
+  precinct_size[1].w = tmp.w;
+  precinct_size[1].h = tmp.h;
+  //
+  char prog_order_store[] = "RPCL";
+  char *prog_order = prog_order_store;
+  float quantization_step = -1.0;
+  bool reversible = false;
+  // int employ_color_transform = -1;
+  //
+
+
+  siz.set_image_extent(ojph::point(
+    image_offset.x + Nx, //ppm.get_size().w,
+    image_offset.y + Ny //ppm.get_size().h
+  ));
+
+  int num_comps = 1; // gray
+  siz.set_num_components(num_comps);
+  ojph::point subs (1,1);
+  siz.set_component(
+    0,
+    subs, //ppm.get_comp_subsampling(0),
+    16, //ppm.get_bit_depth(0),
+    0 //ppm.get_is_signed(0)
+  );
+  siz.set_image_offset(image_offset);
+  siz.set_tile_size(tile_size);
+  siz.set_tile_offset(tile_offset);
+
+  ojph::param_cod cod = codestream.access_cod();
+  cod.set_num_decomposition(num_decompositions);
+  cod.set_block_dims(block_size.w, block_size.h);
+  if (num_precints != -1) cod.set_precinct_size(num_precints, precinct_size);
+  cod.set_progression_order(prog_order);
+  cod.set_color_transform(false);
+  cod.set_reversible(reversible);
+  if (!reversible && quantization_step != -1) codestream.access_qcd().set_irrev_quant(quantization_step);
+
+  ojph::j2c_outfile j2c_file;
+  j2c_file.open(output_filename);
+  codestream.write_headers(&j2c_file);
+
+  int next_comp;
+  ojph::line_buf* cur_line = codestream.exchange(NULL, next_comp);
+
+  int height = siz.get_image_extent().y - siz.get_image_offset().y;
+  for (int i = 0; i < height; ++i) {
+    assert(0 == next_comp); // !! not planar
+    get_data_line(data, i, Nx, Ny, cur_line, 1);
+    cur_line = codestream.exchange(cur_line, next_comp);
+  }
+  codestream.flush();
+  codestream.close();
+  return 0;
+}
+
+
+
+
+
+
 int main(int argc, char * argv[]) {
   char *input_filename = NULL;
   char *output_filename = NULL;
